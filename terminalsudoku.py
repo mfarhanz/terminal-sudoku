@@ -9,11 +9,10 @@ import platform
 import os
 import sys
 
-
-def draw_grid(matrix=None):
+def draw_grid(matrix=None, no_delay=False):
     rows = len(matrix)
     cols = len(matrix[0])
-    delay = 0.0001
+    delay = 0 if no_delay else 0.0001
     sys.stdout.write(f'\n{VDASH_T}')
     for c in range(cols):
         sys.stdout.write(HDASH * 5 + (VDASH_T, VDASH_Tv)[c in [2, 5]])
@@ -332,14 +331,19 @@ def show_message(msg, delay=0.001, sr=None, sc=None, color=None, no_delay=False)
     output_lines = ['' for _ in range(height)]
     if color is not None:
         sys.stdout.write(color)
-    for char in char_lines:
-        for i in range(height):
-            output_lines[i] += char[i]
-        for i, line in enumerate(output_lines):
-            sys.stdout.write(f"\033[{start_row + i};{start_col}H{line}")
-        sys.stdout.flush()
-        if not no_delay:
-            sleep(delay)
+    chunk_size = 24
+    chunks = [char_lines[i:i + chunk_size] for i in range(0, len(char_lines), chunk_size)]
+    for block in chunks:
+        for char in block:
+            for i in range(height):
+                output_lines[i] += char[i]
+            for i, line in enumerate(output_lines):
+                sys.stdout.write(f"\033[{start_row + i};{start_col}H{line}")
+            sys.stdout.flush()
+            if not no_delay:
+                sleep(delay)
+        output_lines[:] = ['' for _ in range(height)]
+        start_row += 3
     if color is not None:
         sys.stdout.write(RESET)
 
@@ -390,10 +394,10 @@ def reset_console():
     sys.stdout.flush()
 
 # Background thread function
-def inactivity_checker(timeout_seconds=20):
+def inactivity_checker(timeout_seconds=300):
     global TIMESTAMP
     while True:
-        sleep(5)  # Check every 5 seconds — low CPU usage
+        sleep(10)  # Check every 5 seconds — low CPU usage
         elapsed = time() - TIMESTAMP
         if elapsed >= timeout_seconds:
             display_temp_message(choice(AFK_MSGS), 2)
@@ -431,7 +435,7 @@ def on_key_event(event):
                 update_cell(CURR_Y, CURR_X, event.name)
             highlight_cell(CURR_Y, CURR_X, True)
     elif event.name in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ':
-        if INPUT_MODE:
+        if INPUT_MODE and len(INPUT) < 20:
             sys.stdout.write(CONSOLE)
             INPUT += event.name
             show_message(INPUT, no_delay=True)
@@ -451,7 +455,7 @@ def on_key_event(event):
             input_mode_blink()
         else:
             INPUT_MODE = False
-            if any(sub in INPUT for sub in ['restart', 'res', 'board', 're', 'new', 'gen', 'create', 'blank']):
+            if any(sub in INPUT for sub in ['restart', 'res', 'board', 're', 'new', 'gen', 'create', 'blan']):
                 if not AUTO_SOLVE:
                     GRID[:], CLUE_LOCS[:] = generate_sudoku()
                     clear_screen()
@@ -460,6 +464,18 @@ def on_key_event(event):
                     show_message(MESSAGE)
                     sleep(1)
                     update_message('')
+            elif any(sub in INPUT for sub in ['cls']):
+                clear_screen()
+                draw_grid(GRID, no_delay=True)
+            elif any(sub in INPUT for sub in ['rul', 'goa', 'direct', 'aim']):
+                info = "each row, column, and box must contain the digits 1 to 9 exactly once."
+                display_temp_message(info, delay=3)
+            elif any(sub in INPUT for sub in ['help', 'hlp', 'guid', '?', 'inf']):
+                info = "use arrow keys to move. use num keys to solve. hit enter to type commands. type solve for auto-solver. hit esc to quit."
+                display_temp_message(info, delay=4)
+            elif any(sub in INPUT for sub in ['comman', 'control', 'key', 'usag']):
+                info = "[help/guide/info/?][rules/goal][commands/usage][cls/clear][reset/new/blank][esc/quit/exit][hint/tip/advice][solve/auto][stop/break/cancel/x][slow/fast]"
+                display_temp_message(info, delay=10)
             elif any(sub in INPUT for sub in ['stop', 'paus', 'break', 'halt', 'wait', 'x']):
                 if AUTO_SOLVE:
                     AUTO_SOLVE = False
@@ -498,8 +514,8 @@ def on_key_event(event):
             elif any(sub in INPUT for sub in ['quit', 'exi', 'end', 'esc', 'leav', 'termi', 'kill', 'clos',
                                               'abor']):
                 end_process()
-            elif any(sub in INPUT for sub in ['hint', 'help', 'assist', 'clu', 'point', 'tip', 'cue', 'sugg', 'how',
-                                              'advi', 'guide', 'recomm', 'sos', 'hlp']):
+            elif any(sub in INPUT for sub in ['hint', 'assist', 'clu', 'point', 'tip', 'cue', 'sugg', 'how',
+                                              'advi', 'recomm', 'sos']):
                 p = random()
                 try:
                     if 0 <= p <= 0.05:
