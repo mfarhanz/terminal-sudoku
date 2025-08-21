@@ -8,6 +8,7 @@ import keyboard
 import platform
 import os
 import sys
+import re
 
 def draw_grid(matrix=None, no_delay=False):
     rows = len(matrix)
@@ -44,7 +45,7 @@ def draw_grid(matrix=None, no_delay=False):
     # sys.stdout.flush()
     print()
 
-def update_cell(row, col, val, no_delay=False, delay=0.2):
+def update_cell(row, col, val, no_delay=False, delay=0.2, readonly=False):
     def overwrite():
         # Move to the correct position using ANSI escape codes
         sys.stdout.write(f"\033[{(row * 2) + 3};{(col * 6) + 3}H")  # Row and column positions are adjusted
@@ -56,19 +57,32 @@ def update_cell(row, col, val, no_delay=False, delay=0.2):
         sys.stdout.write(f"  {val if int(val) != 0 else ' '}  ")
         update_cell_border(row, col)
     
-    if (row, col) in CLUE_LOCS:
-        flash_cell(row, col, RED, 0.1, 4)
+    if not readonly:
+        if (row, col) in CLUE_LOCS:
+            flash_cell(row, col, RED, 0.1, 4)
+        else:
+            sys.stdout.write(GREEN)  # Highlight cell
+            overwrite()
+            if not no_delay:
+                sleep(delay)  # Brief pause for the color effect
+            sys.stdout.write(RESET)  # Reset to normal colors after the effect
+            overwrite()
+            GRID[row][col] = int(val)
+            if check_sudoku():
+                display_temp_message("puzzle solved", delay=2)
     else:
-        sys.stdout.write(GREEN)  # Highlight cell
-        overwrite()
-        if not no_delay:
-            sleep(delay)  # Brief pause for the color effect
-        sys.stdout.write(RESET)  # Reset to normal colors after the effect
-        overwrite()
+        prev = GRID[row][col]
         GRID[row][col] = int(val)
-        if check_sudoku():
-            display_temp_message("puzzle solved", delay=2)
-
+        if check_validity_at_row_col_box(row, col) == 7:
+            sys.stdout.write(PRESET)
+            overwrite()
+            sys.stdout.write(RESET)
+            if (CURR_Y, CURR_X) not in CLUE_LOCS:
+                CLUE_LOCS.append((CURR_Y, CURR_X))
+        else:
+            flash_cell(row, col, RED, 0.1, 4)
+            GRID[row][col] = prev
+        
 def flash_cell(row, col, color, period=1.0, repeat=1):
     def flash(count):
         if count >= repeat:
@@ -143,6 +157,8 @@ def knuth_algorithm_x_solver(visuals=True):
                 if n:
                     select(X, Y, (i, j, n))
         for solution in x_solve(X, Y, []):
+            if not solution:
+                raise ValueError
             for (r, c, n) in solution:
                 if not AUTO_SOLVE:
                     return
@@ -152,9 +168,11 @@ def knuth_algorithm_x_solver(visuals=True):
                     GRID[r][c] = n
             AUTO_SOLVE = False
             return
-    except (KeyError, IndexError, TypeError, ValueError) as e:
+    except (ValueError, TypeError, IndexError, KeyError) as e:
         AUTO_SOLVE = False
+        display_temp_message("ERROR: can't solve if grid is invalid.")
         display_temp_message(choice(ERROR_MSGS))
+        display_temp_message("try removing recently entered values.")
 
 def exact_cover(X, Y):
     X = {j: set() for j in X}
@@ -168,7 +186,10 @@ def x_solve(X, Y, solution):
         yield list(solution)
     else:
         c = min(X, key=lambda c: len(X[c]))
-        for r in list(X[c]):
+        xc = list(X[c])
+        if len(xc) == 0:
+            yield None
+        for r in xc:
             solution.append(r)
             cols = select(X, Y, r)
             for s in x_solve(X, Y, solution):
@@ -221,24 +242,34 @@ def brute_force_solver():
     if check_sudoku():
         AUTO_SOLVE = False
         return False
-    empty = find_empty_cell(GRID)
-    if not empty:
-        AUTO_SOLVE = False
-        return True  # Solved
-    row, col = empty
-    for num in range(1, 10):
-        if not AUTO_SOLVE:
-            return False
-        if is_valid(GRID, row, col, num):
-            update_cell(row, col, num, delay=0.07)
-            if brute_force_solver():
-                return True
+    try:
+        empty = find_empty_cell(GRID)
+        if not empty:
+            AUTO_SOLVE = False
+            return True  # Solved
+        row, col = empty
+        for num in range(1, 10):
             if not AUTO_SOLVE:
                 return False
-            update_cell(row, col, 0, delay=0.07)
-    return False
+            if is_valid(GRID, row, col, num):
+                update_cell(row, col, num, delay=0.07)
+                if brute_force_solver():
+                    return True
+                if not AUTO_SOLVE:
+                    return False
+                update_cell(row, col, 0, delay=0.07)
+        return False
+    except Exception as e:
+        AUTO_SOLVE = False
+        display_temp_message("ERROR: can't solve if grid is invalid.")
+        display_temp_message(choice(ERROR_MSGS))
+        display_temp_message("try removing recently entered values.")
 
 ########### CODE COPIED FROM OUTSIDE - END ###########
+
+def check_manual_entry_valid_format(s):
+    pattern = r'^\[([0-8])\]\[([0-8])\]=([0-9])$'
+    return re.match(pattern, s) is not None
 
 def check_digit_list(lst, strict=True):
     if strict:
@@ -379,11 +410,13 @@ def display_splash():
     clear_screen()
 
 def clear_screen():
+    global MESSAGE
     # Check the operating system
     if platform.system().lower() == "windows":
         os.system("cls")  # For Windows
     else:
         os.system("clear")  # For Unix-like systems (Linux/macOS)
+    MESSAGE = ''
     sys.stdout.write("\033[?25l")
     sys.stdout.flush()
 
@@ -418,7 +451,7 @@ def end_process():
     os.kill(os.getpid(), SIGINT)
 
 def on_key_event(event):
-    global CURR_Y, CURR_X, GRID, CLUE_LOCS, AUTO_SOLVE, AUTO_SOLVER_CHOOSING, INPUT_MODE, INPUT, TIMESTAMP
+    global CURR_Y, CURR_X, GRID, CLUE_LOCS, AUTO_SOLVE, AUTO_SOLVER_CHOOSING, INPUT_MODE, INPUT, TIMESTAMP, MANUAL_CREATE
     TIMESTAMP = time()
     if event.name in ['up', 'down', 'right', 'left'] or event.name in '123456789':
         if not AUTO_SOLVE:
@@ -432,7 +465,7 @@ def on_key_event(event):
             elif event.name == 'right':
                 CURR_X = (CURR_X + 1) % 9
             elif event.name in '123456789':
-                update_cell(CURR_Y, CURR_X, event.name)
+                update_cell(CURR_Y, CURR_X, event.name, readonly=MANUAL_CREATE)
             highlight_cell(CURR_Y, CURR_X, True)
     elif event.name in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ':
         if INPUT_MODE and len(INPUT) < 20:
@@ -448,6 +481,8 @@ def on_key_event(event):
         else:
             if not AUTO_SOLVE:
                 update_cell(CURR_Y, CURR_X, 0)
+                if MANUAL_CREATE and (CURR_Y, CURR_X) in CLUE_LOCS:
+                    CLUE_LOCS.remove((CURR_Y, CURR_X))
     elif event.name == 'enter':
         sys.stdout.write(RESET)
         if not INPUT_MODE:
@@ -455,7 +490,7 @@ def on_key_event(event):
             input_mode_blink()
         else:
             INPUT_MODE = False
-            if any(sub in INPUT for sub in ['restart', 'res', 'board', 're', 'new', 'gen', 'create', 'blan']):
+            if any(sub in INPUT for sub in ['restart', 'res', 'board', 'new', 'gen', 'blan']):
                 if not AUTO_SOLVE:
                     GRID[:], CLUE_LOCS[:] = generate_sudoku()
                     clear_screen()
@@ -464,6 +499,17 @@ def on_key_event(event):
                     show_message(MESSAGE)
                     sleep(1)
                     update_message('')
+            elif any(sub in INPUT for sub in ['crea', 'creat', 'create', 'make']):
+                if not AUTO_SOLVE and not MANUAL_CREATE:
+                    GRID[:] = [[0 for _ in range(9)] for _ in range(9)]
+                    CLUE_LOCS.clear()
+                    clear_screen()
+                    draw_grid(GRID, no_delay=True)
+                    MANUAL_CREATE = True
+                    display_temp_message("manual grid creation chosen.")
+                    display_temp_message("enter grid values using arrow keys in grid", delay=2)
+                else:
+                    display_temp_message("can't do that right now.")
             elif any(sub in INPUT for sub in ['cls']):
                 clear_screen()
                 draw_grid(GRID, no_delay=True)
@@ -491,6 +537,8 @@ def on_key_event(event):
                     update_message('choose method - slow or fast?')
                     show_message(MESSAGE)
                     AUTO_SOLVER_CHOOSING = True
+                else:
+                    display_temp_message("can't do that right now.")
             elif any(sub in INPUT for sub in ['slo', 'fas', 'low', 'spee', 'rapi', 'quic', 'zip', 'hurr']):
                 if AUTO_SOLVE and AUTO_SOLVER_CHOOSING:
                     AUTO_SOLVER_CHOOSING = False
@@ -504,13 +552,25 @@ def on_key_event(event):
                         th.start()
                 else:
                     display_temp_message("unexpected command.")
-            elif any(sub in INPUT for sub in ['cross', 'canc']):
+            elif any(sub in INPUT for sub in ['cross', 'canc', 'done']):
                 if AUTO_SOLVE and AUTO_SOLVER_CHOOSING:
                     AUTO_SOLVE = False
                     AUTO_SOLVER_CHOOSING = False
                     display_temp_message("auto-solver stopped.")
+                elif MANUAL_CREATE:
+                    MANUAL_CREATE = False
+                    if len(CLUE_LOCS) > 25:
+                        display_temp_message(choice(READY_MSGS_1))
+                    elif len(CLUE_LOCS) > 8:
+                        display_temp_message(choice(READY_MSGS_2))
+                    else:
+                        display_temp_message(choice(READY_MSGS_3))
+                        GRID[:], CLUE_LOCS[:] = generate_sudoku()
+                        clear_screen()
+                        draw_grid(GRID)
+                        display_temp_message("here's a better one.")
                 else:
-                    display_temp_message("no task found to cancel")
+                    display_temp_message("no task found to cancel.")
             elif any(sub in INPUT for sub in ['quit', 'exi', 'end', 'esc', 'leav', 'termi', 'kill', 'clos',
                                               'abor']):
                 end_process()
@@ -621,6 +681,7 @@ if __name__ == '__main__':
     DEF_FONT = 'cybermedium'
     NUM_FONT = 'straight'   # or 'mini'
     SYM_FONT = 'italic'     # or 'mini'
+    MANUAL_CREATE = False
     AUTO_SOLVE = False
     AUTO_SOLVER_CHOOSING = False
     AUTO_SOLVER_METHOD = 'a'
@@ -669,6 +730,30 @@ if __name__ == '__main__':
         'please come back.', 'at least shut me down.', "can't even ctrl+c myself.", "still waiting.",
         "guess i'll keep waiting.", "just me and my thoughts i guess.", "well, this is awkward.",
         "cool. i’ll just... wait.", "i feel... abandoned.", "guess I’ll talk to myself.", "your chair misses you."
+    ]
+    
+    READY_MSGS_1 = [
+        'your grid is ready to solve.', 'ready, set, go!', 'another fine grid. well done.', 'good luck and have fun.',
+        'enjoy solving your grid.', 'nice and easy. have fun.', "this should'nt be hard. good luck.",
+        "pfft. should'nt take too much time.", "ehhh. not a bad grid.", "easy. should'nt take more than an hour.",
+        "barely a challenge. gl."
+    ]
+
+    READY_MSGS_2 = [
+        "now this is getting interesting.", "i might be of assistance. heh heh.", "you'll be needing my help. soon.",
+        "oho, this is a hard one!", "things look spicy in this grid.", "ooooh. this grid interests me.",
+        "this is a difficult one. gl.", "remember, you can ask me for help. you'll need it.",
+        "finally, some number crunching.", "this grid needs brains.", "hmmmmm. i like this grid.",
+        "yep, this is going to be hard. gl!", "uhhh......good luck!"
+    ]
+
+    READY_MSGS_3 = [
+        "this....is a shitty grid.", "there's not much to help here...", "um. r u sure about this grid?",
+        "this isn't a very helpful grid.", "uhhh. you might want to redo this one.", "...yeah this grid is ass.",
+        "not many clues to help here.", "maybe you want to rethink this grid?",
+        "do you know how a grid should look like?", "bro. this is too easy.",
+        "i like easy puzzles. but this isn't even a puzzle.", "this is not how you make a sudoku grid.",
+        "not much to solve here, huh?"
     ]
     
     try:
