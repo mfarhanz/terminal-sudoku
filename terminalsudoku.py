@@ -4,11 +4,14 @@ from threading import Timer, Thread
 from signal import SIGINT
 from pyfiglet import Figlet
 from itertools import product
-import keyboard
+# import keyboard
 import platform
 import os
 import sys
 import re
+
+import tty
+import termios
 
 def draw_grid(matrix=None, no_delay=False):
     rows = len(matrix)
@@ -447,7 +450,7 @@ def end_process():
     sys.stdout.write(RESET)
     display_temp_message(choice(QUIT_MSGS), 1.7, 0.08)
     reset_console()
-    keyboard.unhook_all()  # Stop the event listener
+    # keyboard.unhook_all()  # Stop the event listener
     os.kill(os.getpid(), SIGINT)
 
 def on_key_event(event):
@@ -655,6 +658,45 @@ def generate_sudoku():
                 f.append((i, j))
     return g, f
 
+
+
+# Key mapping helper for terminal stdin
+def get_key():
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+        if ch == '\x1b':  # Escape sequence (e.g., arrow keys)
+            ch2 = sys.stdin.read(1)
+            if ch2 == '[':
+                ch3 = sys.stdin.read(1)
+                if ch3 == 'A': return 'up'
+                elif ch3 == 'B': return 'down'
+                elif ch3 == 'C': return 'right'
+                elif ch3 == 'D': return 'left'
+            return 'esc'
+        elif ch == '\r' or ch == '\n':
+            return 'enter'
+        elif ch == '\x7f' or ch == '\x08':
+            return 'backspace'
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+# Mock class to keep your existing on_key_event(event) signature intact
+class KeyEvent:
+    def __init__(self, name):
+        self.name = name
+
+def start_key_listener():
+    while True:
+        key_name = get_key()
+        event = KeyEvent(key_name)
+        on_key_event(event)
+
+
+
 if __name__ == '__main__':
     GREEN = '\033[32m'
     RED = '\033[31m'
@@ -766,7 +808,9 @@ if __name__ == '__main__':
         sleep(1)
         bg_thread = Thread(target=inactivity_checker, daemon=True)
         bg_thread.start()
-        keyboard.on_press(on_key_event, suppress=True)
-        keyboard.wait('`')
+        
+        # keyboard.on_press(on_key_event, suppress=True)
+        # keyboard.wait('`')
+        start_key_listener()
     except KeyboardInterrupt:
         reset_console()
