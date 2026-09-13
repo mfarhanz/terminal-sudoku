@@ -381,6 +381,7 @@ def show_message(msg, delay=0.001, sr=None, sc=None, color=None, no_delay=False)
         start_row += 3
     if color is not None:
         sys.stdout.write(RESET)
+    sys.stdout.flush()
 
 def input_mode_blink():
     global DELAY2_TIMER, SHOW_CURSOR_ON_BLINK
@@ -679,29 +680,25 @@ def generate_sudoku():
 
 
 def get_key():
-    """Reads a key or escape sequence non-blockingly from stdin."""
-    # Check if input is available on stdin (0.01s timeout)
-    rlist, _, _ = slct.select([sys.stdin], [], [], 0.02)
-    if not rlist:
+    """Direct non-blocking read for ttyd compatibility."""
+    try:
+        ch = sys.stdin.read(1)
+    except IOError:
         return None
 
-    ch = sys.stdin.read(1)
+    if not ch:
+        return None
 
-    # Escape sequences (Arrow keys, Esc)
+    # Handle Escape Sequences (Arrows, etc.)
     if ch == '\x1b':
-        # Check if more characters are immediately available (part of arrow sequence)
-        rlist, _, _ = slct.select([sys.stdin], [], [], 0.02)
-        if rlist:
-            ch2 = sys.stdin.read(1)
-            if ch2 == '[':
-                rlist, _, _ = slct.select([sys.stdin], [], [], 0.02)
-                if rlist:
-                    ch3 = sys.stdin.read(1)
-                    if ch3 == 'A': return 'up'
-                    elif ch3 == 'B': return 'down'
-                    elif ch3 == 'C': return 'right'
-                    elif ch3 == 'D': return 'left'
+        # Read next characters if available
+        seq = sys.stdin.read(2)
+        if seq == '[A': return 'up'
+        if seq == '[B': return 'down'
+        if seq == '[C': return 'right'
+        if seq == '[D': return 'left'
         return 'esc'
+        
     elif ch in ('\r', '\n'):
         return 'enter'
     elif ch in ('\x7f', '\x08'):
@@ -716,23 +713,38 @@ class KeyEvent:
 
 
 def start_key_listener():
-    """Main input loop running in raw terminal mode."""
+    """Main input loop configured specifically for web PTYs (ttyd)."""
     global OLD_TERMIOS_SETTINGS
     fd = sys.stdin.fileno()
+    
+    # Save original settings
     OLD_TERMIOS_SETTINGS = termios.tcgetattr(fd)
+    
     try:
-        # Set raw mode ONCE for the entire listener session
-        tty.setraw(fd)
+        # Get a mutable copy of attributes
+        mode = termios.tcgetattr(fd)
+        
+        # Disable ICANON (canonical mode), ECHO, and signals (ISIG)
+        mode[3] &= ~(termios.ICANON | termios.ECHO | termios.ISIG)
+        
+        # Non-blocking read setup: minimum 0 chars, 0 wait time
+        mode[6][termios.VMIN] = 0
+        mode[6][termios.VTIME] = 0
+        
+        termios.tcsetattr(fd, termios.TCSANOW, mode)
+        
         while True:
             key_name = get_key()
             if key_name:
                 event = KeyEvent(key_name)
                 on_key_event(event)
+                sys.stdout.flush()  # Ensure key response prints instantly
             else:
-                # CRITICAL: Sleep briefly to yield CPU time back to the OS and TTY renderer
-                sleep(0.01)
+                sleep(0.01)  # Prevent CPU spinning
+                
     finally:
-        reset_console()
+        # Restore terminal settings on exit
+        termios.tcsetattr(fd, termios.TCSAFLUSH, OLD_TERMIOS_SETTINGS)
 
 
 

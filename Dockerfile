@@ -18,5 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY terminalsudoku.py .
 
-# Run ttyd without sudo
-CMD sh -c "ttyd -p ${PORT:-10000} python terminalsudoku.py"
+# Environment variable to force Python stdout/stdin to be unbuffered
+ENV PYTHONUNBUFFERED=1
+
+# -W: allow clients to write (keyboard input)
+# -p: port configuration
+CMD ["sh", "-c", "ttyd -W -p ${PORT:-10000} python3 -u terminalsudoku.py"]
