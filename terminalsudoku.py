@@ -11,6 +11,7 @@ import sys
 import re
 
 import tty
+import select as slct
 import termios
 
 def draw_grid(matrix=None, no_delay=False):
@@ -428,6 +429,15 @@ def reset_console():
     sys.stdout.write("\033[?25h")
     sys.stdout.write(RESET)
     sys.stdout.flush()
+    
+    # Restore termios terminal settings if set
+    if OLD_TERMIOS_SETTINGS and not IS_WINDOWS:
+        try:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, OLD_TERMIOS_SETTINGS)
+        except Exception:
+            pass
+    
+    
 
 # Background thread function
 def inactivity_checker(timeout_seconds=300):
@@ -452,6 +462,7 @@ def end_process():
     reset_console()
     # keyboard.unhook_all()  # Stop the event listener
     os.kill(os.getpid(), SIGINT)
+    # sys.exit(0)
 
 def on_key_event(event):
     global CURR_Y, CURR_X, GRID, CLUE_LOCS, AUTO_SOLVE, AUTO_SOLVER_CHOOSING, INPUT_MODE, INPUT, TIMESTAMP, MANUAL_CREATE
@@ -631,6 +642,7 @@ def on_key_event(event):
             INPUT = ''
     elif event.name == 'esc':  # Clean exit if ESC is pressed
         end_process()
+    sys.stdout.flush()
 
 def generate_sudoku():
     def available_digits(r, c):
@@ -660,40 +672,58 @@ def generate_sudoku():
 
 
 
-# Key mapping helper for terminal stdin
 def get_key():
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(sys.stdin.fileno())
-        ch = sys.stdin.read(1)
-        if ch == '\x1b':  # Escape sequence (e.g., arrow keys)
+    """Reads a key or escape sequence non-blockingly from stdin."""
+    # Check if input is available on stdin (0.01s timeout)
+    rlist, _, _ = slct.select([sys.stdin], [], [], 0.01)
+    if not rlist:
+        return None
+
+    ch = sys.stdin.read(1)
+
+    # Escape sequences (Arrow keys, Esc)
+    if ch == '\x1b':
+        # Check if more characters are immediately available (part of arrow sequence)
+        rlist, _, _ = slct.select([sys.stdin], [], [], 0.02)
+        if rlist:
             ch2 = sys.stdin.read(1)
             if ch2 == '[':
-                ch3 = sys.stdin.read(1)
-                if ch3 == 'A': return 'up'
-                elif ch3 == 'B': return 'down'
-                elif ch3 == 'C': return 'right'
-                elif ch3 == 'D': return 'left'
-            return 'esc'
-        elif ch == '\r' or ch == '\n':
-            return 'enter'
-        elif ch == '\x7f' or ch == '\x08':
-            return 'backspace'
-        return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                rlist, _, _ = slct.select([sys.stdin], [], [], 0.02)
+                if rlist:
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == 'A': return 'up'
+                    elif ch3 == 'B': return 'down'
+                    elif ch3 == 'C': return 'right'
+                    elif ch3 == 'D': return 'left'
+        return 'esc'
+    elif ch in ('\r', '\n'):
+        return 'enter'
+    elif ch in ('\x7f', '\x08'):
+        return 'backspace'
+    
+    return ch
 
-# Mock class to keep your existing on_key_event(event) signature intact
+
 class KeyEvent:
     def __init__(self, name):
         self.name = name
 
+
 def start_key_listener():
-    while True:
-        key_name = get_key()
-        event = KeyEvent(key_name)
-        on_key_event(event)
+    """Main input loop running in raw terminal mode."""
+    global OLD_TERMIOS_SETTINGS
+    fd = sys.stdin.fileno()
+    OLD_TERMIOS_SETTINGS = termios.tcgetattr(fd)
+    try:
+        # Set raw mode ONCE for the entire listener session
+        tty.setraw(fd)
+        while True:
+            key_name = get_key()
+            if key_name:
+                event = KeyEvent(key_name)
+                on_key_event(event)
+    finally:
+        reset_console()
 
 
 
@@ -720,6 +750,7 @@ if __name__ == '__main__':
     TIMESTAMP = None
     SHOW_CURSOR_ON_BLINK = False
     RENDERER = None
+    OLD_TERMIOS_SETTINGS = None
     DEF_FONT = 'cybermedium'
     NUM_FONT = 'straight'   # or 'mini'
     SYM_FONT = 'italic'     # or 'mini'
