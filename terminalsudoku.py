@@ -396,8 +396,14 @@ def input_mode_blink():
     display = INPUT + ('_' if SHOW_CURSOR_ON_BLINK else '   ')
     show_message(display, color=CONSOLE, no_delay=True)
     SHOW_CURSOR_ON_BLINK = not SHOW_CURSOR_ON_BLINK
+    
+    # Ensure previous timer is cancelled before starting a new one
+    if DELAY2_TIMER:
+        DELAY2_TIMER.cancel()
+        
     # Schedule next toggle
     DELAY2_TIMER = Timer(0.6, input_mode_blink)
+    DELAY2_TIMER.daemon = True
     DELAY2_TIMER.start()
 
 def display_temp_message(msg, delay=None, c_delay=None):
@@ -675,7 +681,7 @@ def generate_sudoku():
 def get_key():
     """Reads a key or escape sequence non-blockingly from stdin."""
     # Check if input is available on stdin (0.01s timeout)
-    rlist, _, _ = slct.select([sys.stdin], [], [], 0.01)
+    rlist, _, _ = slct.select([sys.stdin], [], [], 0.02)
     if not rlist:
         return None
 
@@ -722,6 +728,9 @@ def start_key_listener():
             if key_name:
                 event = KeyEvent(key_name)
                 on_key_event(event)
+            else:
+                # CRITICAL: Sleep briefly to yield CPU time back to the OS and TTY renderer
+                sleep(0.01)
     finally:
         reset_console()
 
